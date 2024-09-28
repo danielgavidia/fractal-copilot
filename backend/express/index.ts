@@ -2,6 +2,7 @@
 import express from "express";
 import axios from "axios";
 import { convertToDateString } from "../utils/datetime";
+import { getDiffSummary } from "./openai";
 
 // setup
 const app = express();
@@ -54,99 +55,42 @@ app.get("/github/pr-ids/:owner/:repo/:state", async (req, res) => {
         const prsFinal: PR[] = prs.filter(
             (x: { number: number; closedAt: string }) => x.closedAt === dates[0]
         );
-        console.log(prs);
-        res.status(200).json({ data: prsFinal });
+
+        // step 5: for every PR number in prsFinal, pull diff text
+        const getPullRequestDiff = async (
+            owner: string,
+            repo: string,
+            closedAt: string,
+            pullRequestNumber: number
+        ) => {
+            const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${pullRequestNumber}`;
+            try {
+                const res = await axios({
+                    method: "GET",
+                    url: url,
+                    headers: {
+                        Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+                        Accept: "application/vnd.github.v3.diff",
+                    },
+                });
+                return { number: pullRequestNumber, closedAt: closedAt, diff: res.data };
+            } catch (error) {
+                console.log(error);
+            }
+        };
+        const prDiffs = await Promise.all(
+            prsFinal.map((pr) => getPullRequestDiff(owner, repo, pr.closedAt, pr.number))
+        );
+        const prSummaries = await Promise.all(prDiffs.map((pr) => getDiffSummary(pr?.diff)));
+        const final = prSummaries.map((x, index) => {
+            return {
+                number: prDiffs[index]?.number,
+                link: `https://www.github.com/${owner}/${repo}/pull/${prDiffs[index]?.number}`,
+                summary: x,
+            };
+        });
+        res.status(200).json({ data: final.sort((a, b) => (a.number || 0) - (b.number || 0)) });
     } catch (error) {
         res.status(400).json({ message: error });
     }
 });
-
-// import fetch from 'node-fetch';
-
-// // Function to get diff from GitHub API
-// async function getGitHubDiff(owner: string, repo: string, pullNumber: number, token: string): Promise<string | null> {
-//     const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${pullNumber}`;
-
-//     try {
-//         const response = await fetch(url, {
-//             method: 'GET',
-//             headers: {
-//                 'Authorization': `Bearer ${token}`,
-//                 'Accept': 'application/vnd.github.v3.diff',  // Getting diff format
-//             },
-//         });
-
-//         if (!response.ok) {
-//             throw new Error(`Error fetching pull request diff: ${response.statusText}`);
-//         }
-
-//         const diff = await response.text();  // GitHub API returns plain text diff
-//         return diff;
-//     } catch (error) {
-//         console.error(error);
-//         return null;
-//     }
-// }
-
-// // Function to format the diff in Markdown code block (ChatGPT format)
-// function formatDiffForChatGPT(diff: string): string {
-//     // Wrap the diff in a Markdown code block for ChatGPT
-//     return `Here is the diff from the pull request:\n\n\`\`\`diff\n${diff}\n\`\`\``;
-// }
-
-// // Function to send formatted diff to ChatGPT API
-// async function sendToChatGPT(diff: string, openAIApiKey: string): Promise<void> {
-//     const url = 'https://api.openai.com/v1/chat/completions';
-
-//     const chatGPTRequestBody = {
-//         model: "gpt-4",  // Using GPT-4 model
-//         messages: [
-//             {
-//                 role: "user",
-//                 content: formatDiffForChatGPT(diff)
-//             }
-//         ]
-//     };
-
-//     try {
-//         const response = await fetch(url, {
-//             method: 'POST',
-//             headers: {
-//                 'Content-Type': 'application/json',
-//                 'Authorization': `Bearer ${openAIApiKey}`,
-//             },
-//             body: JSON.stringify(chatGPTRequestBody),
-//         });
-
-//         if (!response.ok) {
-//             throw new Error(`Error sending to ChatGPT: ${response.statusText}`);
-//         }
-
-//         const chatGPTResponse = await response.json();
-//         console.log("ChatGPT Response:", chatGPTResponse);
-//     } catch (error) {
-//         console.error(error);
-//     }
-// }
-
-// // Main function to coordinate the flow
-// async function main() {
-//     const owner = 'your-username';
-//     const repo = 'your-repo-name';
-//     const pullNumber = 5;  // Example pull request number
-//     const githubToken = 'your-github-token';  // GitHub Personal Access Token
-//     const openAIApiKey = 'your-openai-api-key';  // OpenAI API key
-
-//     // Step 1: Get the diff from GitHub
-//     const diff = await getGitHubDiff(owner, repo, pullNumber, githubToken);
-
-//     if (diff) {
-//         // Step 2: Send the formatted diff to the ChatGPT API
-//         await sendToChatGPT(diff, openAIApiKey);
-//     } else {
-//         console.log("Failed to retrieve the diff from GitHub.");
-//     }
-// }
-
-// // Execute the main function
-// main();
