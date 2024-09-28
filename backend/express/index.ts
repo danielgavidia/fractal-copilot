@@ -1,8 +1,12 @@
 // libraries
 import express from "express";
-import axios from "axios";
 import { convertToDateString } from "../utils/datetime";
-import { getDiffSummary } from "./openai";
+import {
+    getPullRequestDiffSummary,
+    getPullRequestManyBlockers,
+    getPullRequestManyLearnings,
+    getPullRequestManyWins,
+} from "./openai";
 import { getPullRequests, getPullRequestDiff } from "./github";
 
 // setup
@@ -23,50 +27,83 @@ app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
 });
 
-// get Github repos
-app.get("/github/pr-ids/:owner/:repo/:state", async (req, res) => {
+// get Github PR summaries, generated with OpenAI integration
+app.get("/github/prs/:owner/:repo/:date", async (req, res) => {
     try {
         // step 1: get Github PRs for a given owner, repo, and state
         const owner = req.params.owner;
         const repo = req.params.repo;
-        const state = req.params.state;
-        const resGithub = await getPullRequests({ owner, repo, state });
+        const date = req.params.date;
+        const prs = await getPullRequests({ owner, repo, state: "closed" });
 
-        // step 2: generate {closed-date, pr-id}[] from PRs array
-        interface PR {
-            number: number;
-            closedAt: string;
-        }
-        const prs: PR[] = resGithub.data.map((x: { number: number; closed_at: string }) => ({
-            number: x.number,
-            closedAt: convertToDateString(x.closed_at),
-        }));
+        // step 2: filter PRs by date
+        const prsFiltered = prs.filter((x: any) => convertToDateString(x.closed_at) === date);
 
-        // step 3: generate closed-date[] from {closed-date, pr-id}[]
-        const dates: string[] = prs.map((x) => x.closedAt);
-
-        // step 4: sort [closed-date] desc and choose first item
-        const prsFinal: PR[] = prs.filter(
-            (x: { number: number; closedAt: string }) => x.closedAt === dates[0]
-        );
-
-        // step 5: for every PR number in prsFinal, pull diff text
+        // step 3: pull PR diff texts
         const prDiffs = await Promise.all(
-            prsFinal.map((pr) =>
+            prsFiltered.map((pr: any) =>
                 getPullRequestDiff({ owner: owner, repo: repo, number: pr.number })
             )
         );
-        const prSummaries = await Promise.all(prDiffs.map((pr) => getDiffSummary(pr?.diff)));
+
+        // step 4: get PR diff OpenAI summaries
+        const prSummaries = await Promise.all(
+            prDiffs.map((diff) => getPullRequestDiffSummary(diff))
+        );
+
+        // step 5: create final object with proper keys
         const final = prSummaries
             .map((x, index) => {
                 return {
-                    number: prDiffs[index]?.number,
+                    number: prs[index]?.number,
                     link: `https://www.github.com/${owner}/${repo}/pull/${prDiffs[index]?.number}`,
                     summary: x,
                 };
             })
             .sort((a, b) => (a.number || 0) - (b.number || 0));
         res.status(200).json(final);
+    } catch (error) {
+        res.status(400).json({ message: error });
+    }
+});
+
+// get blockers, learnings, and wins
+app.get("/github/prs/general/:owner/:repo/:date", async (req, res) => {
+    try {
+        const owner = req.params.owner;
+        const repo = req.params.repo;
+        const date = req.params.date;
+
+        // retrieve Github PRs
+        const prs = await getPullRequests({ owner, repo, state: "closed" });
+        const prsFiltered = prs.filter((x: any) => convertToDateString(x.closed_at) === date);
+
+        // get GitHub PR diffs and concat into single string
+        const prDiffs = await Promise.all(
+            prsFiltered.map((pr: any) =>
+                getPullRequestDiff({ owner: owner, repo: repo, number: pr.number })
+            )
+        );
+        const prDiffConcat = prDiffs.join("\n");
+        console.log(prDiffConcat);
+
+        // send to OpenAI and get: blockers
+        const blockers = await getPullRequestManyBlockers(prDiffConcat);
+
+        // send to OpenAI and get: learnings
+        const learnings = await getPullRequestManyLearnings(prDiffConcat);
+
+        // send to OpenAI and get: wins
+        const wins = await getPullRequestManyWins(prDiffConcat);
+
+        // return all three objects as part of single object
+        const response = {
+            blockers: blockers,
+            learnings: learnings,
+            wins: wins,
+        };
+
+        res.status(200).json(response);
     } catch (error) {
         res.status(400).json({ message: error });
     }
