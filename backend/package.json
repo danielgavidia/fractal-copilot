@@ -16,6 +16,7 @@
     "discord-api-types": "^0.37.101",
     "discord.js": "^14.16.2",
     "express": "^4.21.0",
+    "openai": "^4.65.0",
     "ts-node": "^10.9.2"
   }
 }
