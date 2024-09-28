@@ -3,6 +3,7 @@ import express from "express";
 import axios from "axios";
 import { convertToDateString } from "../utils/datetime";
 import { getDiffSummary } from "./openai";
+import { getPullRequests, getPullRequestDiff } from "./github";
 
 // setup
 const app = express();
@@ -29,14 +30,7 @@ app.get("/github/pr-ids/:owner/:repo/:state", async (req, res) => {
         const owner = req.params.owner;
         const repo = req.params.repo;
         const state = req.params.state;
-        const resGithub = await axios({
-            method: "GET",
-            url: `https://api.github.com/repos/${owner}/${repo}/pulls?state=${state}`,
-            headers: {
-                Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
-                Accept: "application/vnd.github.v3+json",
-            },
-        });
+        const resGithub = await getPullRequests({ owner, repo, state });
 
         // step 2: generate {closed-date, pr-id}[] from PRs array
         interface PR {
@@ -57,39 +51,22 @@ app.get("/github/pr-ids/:owner/:repo/:state", async (req, res) => {
         );
 
         // step 5: for every PR number in prsFinal, pull diff text
-        const getPullRequestDiff = async (
-            owner: string,
-            repo: string,
-            closedAt: string,
-            pullRequestNumber: number
-        ) => {
-            const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${pullRequestNumber}`;
-            try {
-                const res = await axios({
-                    method: "GET",
-                    url: url,
-                    headers: {
-                        Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
-                        Accept: "application/vnd.github.v3.diff",
-                    },
-                });
-                return { number: pullRequestNumber, closedAt: closedAt, diff: res.data };
-            } catch (error) {
-                console.log(error);
-            }
-        };
         const prDiffs = await Promise.all(
-            prsFinal.map((pr) => getPullRequestDiff(owner, repo, pr.closedAt, pr.number))
+            prsFinal.map((pr) =>
+                getPullRequestDiff({ owner: owner, repo: repo, number: pr.number })
+            )
         );
         const prSummaries = await Promise.all(prDiffs.map((pr) => getDiffSummary(pr?.diff)));
-        const final = prSummaries.map((x, index) => {
-            return {
-                number: prDiffs[index]?.number,
-                link: `https://www.github.com/${owner}/${repo}/pull/${prDiffs[index]?.number}`,
-                summary: x,
-            };
-        });
-        res.status(200).json({ data: final.sort((a, b) => (a.number || 0) - (b.number || 0)) });
+        const final = prSummaries
+            .map((x, index) => {
+                return {
+                    number: prDiffs[index]?.number,
+                    link: `https://www.github.com/${owner}/${repo}/pull/${prDiffs[index]?.number}`,
+                    summary: x,
+                };
+            })
+            .sort((a, b) => (a.number || 0) - (b.number || 0));
+        res.status(200).json(final);
     } catch (error) {
         res.status(400).json({ message: error });
     }

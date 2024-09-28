@@ -7,12 +7,14 @@ export const getDiffSummary = async (diff: string) => {
         messages: [
             {
                 role: "system",
-                content:
-                    "You are a helpful assistant tasked with summarizing text effectively. You will be provided strings containing the code changes in Github pull requests. They are called 'Diffs'. Avoid starting your answer with 'This pull request...' or 'The pull request' or using the passive voice.",
+                content: `You are a helpful assistant tasked with summarizing text effectively. 
+                    You will be provided strings containing the code changes in Github pull requests. 
+                    They are called 'Diffs'. 
+                    Avoid starting your answer with 'This pull request...' or 'The pull request' or using the passive voice.`,
             },
             {
                 role: "user",
-                content: `In only two sentences maximum, summarize the following pull request diff: ${diff}`,
+                content: `In 100 characters maximum, summarize the following pull request diff: ${diff}`,
             },
         ],
     });
